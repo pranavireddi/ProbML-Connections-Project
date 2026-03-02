@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Connections Prototype</title>
+    <link rel="stylesheet" href="css/main.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="header">
+        <h1 class="title">Connections</h1>
+        <p class="subtitle">Select four tiles that belong together, then submit.</p>
+      </header>
+
+      <main class="main">
+        <section class="status-bar">
+          <div class="status-message" id="status-message">Select four tiles.</div>
+          <div class="mistakes" id="mistakes">Mistakes remaining: 4</div>
+        </section>
+
+        <section class="grid" id="grid"></section>
+
+        <section class="controls">
+          <button class="btn" id="submit-btn">Submit</button>
+          <button class="btn btn-secondary" id="deselect-btn">Deselect</button>
+          <button class="btn btn-tertiary" id="shuffle-btn">Shuffle</button>
+          <button class="btn btn-tertiary" id="reset-btn">Reset</button>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <p class="footer-text">Prototype UI inspired by NYT Connections colors.</p>
+      </footer>
+    </div>
+
+    <script src="js/game.js" defer></script>
+  </body>
+</html>
