@@ -1,5 +1,7 @@
 from SPARQLWrapper import SPARQLWrapper, JSON
 import re
+import random
+import sys
 
 def get_blue_group(property_short, object_short, limit=4):
     sparql = SPARQLWrapper("https://dbpedia.org/sparql")
@@ -53,8 +55,24 @@ def get_blue_group(property_short, object_short, limit=4):
 # # 3. Chess Pieces (Specific Knowledge)
 # print("Chess Pieces:", get_blue_group("dct:subject", "dbc:Chess_pieces"))
 
-import random
-from SPARQLWrapper import SPARQLWrapper, JSON
+def get_top_level_topics():
+    sparql = SPARQLWrapper("https://dbpedia.org/sparql")
+    query = """
+    PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+    PREFIX dbc: <http://dbpedia.org/resource/Category:>
+
+    SELECT DISTINCT ?top_cat ?label WHERE {
+      # We start from 'Main_topic_classifications' to get high-quality pillars
+      ?top_cat skos:broader dbc:Main_topic_classifications .
+      ?top_cat rdfs:label ?label .
+      FILTER (lang(?label) = "en")
+    }
+    ORDER BY ?label
+    """
+    sparql.setQuery(query)
+    sparql.setReturnFormat(JSON)
+    results = sparql.query().convert()
+    return [r['label']['value'] for r in results["results"]["bindings"]]
 
 def get_random_subcategory(parent_category):
     sparql = SPARQLWrapper("https://dbpedia.org/sparql")
@@ -79,13 +97,50 @@ def get_random_subcategory(parent_category):
     # Return a random choice if any exist, otherwise return None
     return "dbc:" + random.choice(subs).split(':')[-1] if subs else None
 
+def get_random_subcategory_weighted(parent_category):
+    """
+    Modified to find subcategories and count their children.
+    We prefer subcategories that have MORE children (breadth).
+    """
+    sparql = SPARQLWrapper("https://dbpedia.org/sparql")
+    
+    # This query finds subcategories AND counts how many children THEY have.
+    query = f"""
+    PREFIX skos: <http://www.w3.org/2004/02/skos/core#>
+    PREFIX dbc: <http://dbpedia.org/resource/Category:>
+    
+    SELECT ?sub (COUNT(?grandchild) AS ?childCount) WHERE {{
+      ?sub skos:broader {parent_category} .
+      OPTIONAL {{ ?grandchild skos:broader ?sub . }}
+    }}
+    GROUP BY ?sub
+    HAVING (COUNT(?grandchild) > 5)  # Pruning: Only keep 'large' subcategories
+    LIMIT 20
+    """
+    sparql.setQuery(query)
+    sparql.setReturnFormat(JSON)
+    results = sparql.query().convert()
+    
+    bindings = results["results"]["bindings"]
+    if not bindings:
+        return None
+    
+    # Instead of random.choice, we pick from the ones with the most children
+    # to ensure we stay in 'fertile' parts of the tree.
+    sorted_subs = sorted(bindings, key=lambda x: int(x['childCount']['value']), reverse=True)
+    
+    # Pick from the top 3 most "populous" subcategories
+    choice = random.choice(sorted_subs[:3])
+    sub_uri = choice['sub']['value'].replace("http://dbpedia.org/resource/", "")
+    return "dbc:" + sub_uri.split(':')[-1]
+
 def find_viable_blue_category(seed_category, depth=3):
     current = seed_category
     print(f"Starting crawl from {current}...")
     
     for i in range(depth):
         # 1. Get a child of the current category
-        next_cat = get_random_subcategory(current)
+        next_cat = get_random_subcategory_weighted(current)
         
         if next_cat:
             # 2. Check if this sub-category has 'Blue-sized' potential (4-15 items)
@@ -104,15 +159,28 @@ def find_viable_blue_category(seed_category, depth=3):
             
     return None, None
 
-# --- EXECUTION ---
-# Pick one of the super categories
-super_categories = ["dbc:Physical_sciences", "dbc:Musical_instruments", "dbc:Games", "dbc:History", "dbc:Nature"]
-seed = random.choice(super_categories)
 
-cat_name, words = find_viable_blue_category(seed)
+def main():
+    num_categories = sys.argv[1]
 
-if cat_name:
-    print(f"\nSUCCESS! Found Category: {cat_name}")
-    print(f"Words: {words}")
-else:
-    print("\nCould not find a perfect sized category this time. Try again!")
+    # Pick one of the super categories
+    super_categories = [f"dbc:{cat}" for cat in get_top_level_topics()]
+
+    ## run until a successful category is found
+    for i in range(1, int(num_categories)+1):
+        while True:
+            seed = random.choice(super_categories)
+            cat_name, words = find_viable_blue_category(seed)
+            if cat_name:
+                print(f"\nSUCCESS! Found Category: {cat_name}")
+                print(f"Words: {words}")
+
+                # save to file in .json format
+                with open(f"categories/{cat_name}.json", "a") as f:
+                    f.write(f"{words}\n")
+                break
+            else:
+                print("\nCould not find a perfect sized category this time. Try again!")
+
+if __name__ == "__main__":
+    main()
