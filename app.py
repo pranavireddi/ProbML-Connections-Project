@@ -11,3 +11,7 @@ def home():
 @app.get("/api/puzzle")
 def get_puzzle():
     return jsonify(generator.generate_puzzle())
+
+@app.get("/ping")
+def ping():
+    return {"ok": True}
