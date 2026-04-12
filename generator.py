@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
 import random
-import subprocess
-import sys
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -14,10 +12,8 @@ class PuzzleGenerator:
         self,
         processed_path: str | Path,
         seed: Optional[int] = None,
-        prior_puzzles_repo: Optional[str | Path] = None,
+        prior_puzzles_json: Optional[str | Path] = None,
         auto_check_duplicates: bool = True,
-        refresh_repo_on_generate: bool = True,
-        checker_script_path: Optional[str | Path] = None,
     ) -> None:
         self.processed_path = Path(processed_path)
         with self.processed_path.open("r", encoding="utf-8") as f:
@@ -37,25 +33,22 @@ class PuzzleGenerator:
                 self.categories_by_color[color].append((idx, cat))
 
         self.auto_check_duplicates = auto_check_duplicates
-        self.refresh_repo_on_generate = refresh_repo_on_generate
-
-        repo_from_env = os.environ.get("NYT-CONNECTIONS-ANSWERS")
-        self.prior_puzzles_repo = (
-            Path(prior_puzzles_repo).expanduser().resolve()
-            if prior_puzzles_repo is not None
-            else (Path(repo_from_env).expanduser().resolve() if repo_from_env else None)
+        self.prior_puzzles_json = (
+            Path(prior_puzzles_json).expanduser().resolve()
+            if prior_puzzles_json is not None
+            else None
         )
-
-        default_checker = Path(__file__).with_name("checkPriorPuzzles.py")
-        self.checker_script_path = (
-            Path(checker_script_path).expanduser().resolve()
-            if checker_script_path is not None
-            else default_checker.resolve()
-        )
+        self._prior_puzzle_signatures: Optional[Set[str]] = None
 
     @staticmethod
     def _norm(word: Any) -> str:
         return str(word).strip().upper()
+
+    @staticmethod
+    def _normalize_for_signature(word: Any) -> str:
+        s = unicodedata.normalize("NFKC", str(word))
+        s = " ".join(s.strip().split())
+        return s.lower()
 
     def _word_set(self, cat: Dict[str, Any]) -> Set[str]:
         return {self._norm(w) for w in cat["members"]}
@@ -100,47 +93,74 @@ class PuzzleGenerator:
                 return idx, cat, float(entry["similarity"])
         return None
 
-    def _candidate_words_csv(self, groups: Sequence[Dict[str, Any]]) -> str:
-        words: List[str] = []
+    def _signature_from_words(self, words: Sequence[Any]) -> str:
+        return ",".join(sorted(self._normalize_for_signature(w) for w in words))
+
+    def _signature_from_answers_puzzle(self, puzzle: Dict[str, Any]) -> Optional[str]:
+        answers = puzzle.get("answers")
+        if not isinstance(answers, list) or len(answers) != 4:
+            return None
+
+        words: List[Any] = []
+        for answer in answers:
+            if not isinstance(answer, dict):
+                return None
+            members = answer.get("members")
+            if not isinstance(members, list) or len(members) != 4:
+                return None
+            words.extend(members)
+
+        if len(words) != 16:
+            return None
+        return self._signature_from_words(words)
+
+    def _signature_from_generated_groups(self, groups: Sequence[Dict[str, Any]]) -> str:
+        words: List[Any] = []
         for cat in groups:
-            words.extend(self._norm(w) for w in cat["members"])
-        return ",".join(words)
+            words.extend(cat["members"])
+        return self._signature_from_words(words)
+
+    def _load_prior_puzzle_signatures(self) -> Set[str]:
+        if self._prior_puzzle_signatures is not None:
+            return self._prior_puzzle_signatures
+
+        if not self.prior_puzzles_json:
+            raise ValueError(
+                "Duplicate checking is enabled, but no prior_puzzles_json path was provided."
+            )
+        if not self.prior_puzzles_json.is_file():
+            raise ValueError(f"Prior-puzzles JSON file not found: {self.prior_puzzles_json}")
+
+        with self.prior_puzzles_json.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, list):
+            puzzles = [x for x in data if isinstance(x, dict)]
+        elif isinstance(data, dict):
+            puzzles = []
+            for value in data.values():
+                if isinstance(value, list) and all(isinstance(x, dict) for x in value):
+                    puzzles = value
+                    break
+            if not puzzles:
+                puzzles = [data]
+        else:
+            puzzles = []
+
+        signatures: Set[str] = set()
+        for puzzle in puzzles:
+            signature = self._signature_from_answers_puzzle(puzzle)
+            if signature is not None:
+                signatures.add(signature)
+
+        self._prior_puzzle_signatures = signatures
+        return signatures
 
     def _is_duplicate_puzzle(self, groups: Sequence[Dict[str, Any]]) -> bool:
         if not self.auto_check_duplicates:
             return False
-        if not self.prior_puzzles_repo:
-            raise ValueError(
-                "Duplicate checking is enabled, but no prior-puzzle repo was provided. "
-                "Pass prior_puzzles_repo=... or set NYT_CONNECTIONS_ANSWERS_REPO."
-            )
-        if not self.prior_puzzles_repo.is_dir():
-            raise ValueError(f"Prior-puzzle repo directory not found: {self.prior_puzzles_repo}")
-        if not self.checker_script_path.is_file():
-            raise ValueError(f"Checker script not found: {self.checker_script_path}")
-
-        cmd = [
-            sys.executable,
-            str(self.checker_script_path),
-            "--repo",
-            str(self.prior_puzzles_repo),
-            "--words",
-            self._candidate_words_csv(groups),
-        ]
-        if self.refresh_repo_on_generate:
-            cmd.append("--verbose")
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        if result.returncode == 1 and "NO MATCH" in result.stdout:
-            return False
-        if result.returncode == 0:
-            return True
-
-        stderr = result.stderr.strip()
-        stdout = result.stdout.strip()
-        details = "\n".join(part for part in [stdout, stderr] if part)
-        raise ValueError(f"Checker failed while validating generated puzzle. {details}".strip())
+        existing_signatures = self._load_prior_puzzle_signatures()
+        return self._signature_from_generated_groups(groups) in existing_signatures
 
     def generate_puzzle(self, max_tries: int = 200) -> Dict[str, Any]:
         purple_pool = self.categories_by_color.get("purple", [])
@@ -218,6 +238,7 @@ class PuzzleGenerator:
 
 if __name__ == "__main__":
     default_path = Path("processed_categories.json")
-    generator = PuzzleGenerator(default_path)
+    prior_json = Path("connections.json") if Path("connections.json").exists() else None
+    generator = PuzzleGenerator(default_path, prior_puzzles_json=prior_json)
     puzzle = generator.generate_puzzle()
     print(json.dumps(puzzle, indent=2))
