@@ -173,6 +173,26 @@ body {
   background-color: var(--purple);
 }
 
+.tile-color-yellow,
+.group-banner-yellow {
+  background: #f2d64b;
+}
+
+.tile-color-green,
+.group-banner-green {
+  background: #98c257;
+}
+
+.tile-color-blue,
+.group-banner-blue {
+  background: #8fb3e8;
+}
+
+.tile-color-purple,
+.group-banner-purple {
+  background: #b285c9;
+}
+
 .controls {
   display: flex;
   justify-content: center;
